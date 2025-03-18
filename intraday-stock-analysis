@@ -4,6 +4,9 @@ import numpy as np
 import ta
 import streamlit as st
 import plotly.graph_objects as go
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 def fetch_stock_data(stock_symbol, period='1d', interval='5m'):
     """Fetch intraday stock data from Yahoo Finance"""
@@ -40,15 +43,60 @@ def generate_intraday_signals(data):
     data['Sell_Signal'] = sell_signals
     return data
 
-def plot_stock_chart(data, stock_symbol):
-    """Plot stock price with Buy/Sell signals using Plotly"""
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close Price'))
-    fig.add_trace(go.Scatter(x=data.index, y=data['Buy_Signal'], mode='markers', name='Buy Signal', marker=dict(color='green', size=10, symbol='triangle-up')))
-    fig.add_trace(go.Scatter(x=data.index, y=data['Sell_Signal'], mode='markers', name='Sell Signal', marker=dict(color='red', size=10, symbol='triangle-down')))
+def get_oversold_overbought_stocks(stock_list):
+    """Fetch daily RSI data and filter oversold (<30) and overbought (>70) stocks"""
+    oversold_stocks = []
+    overbought_stocks = []
     
-    fig.update_layout(title=f'Intraday Stock Analysis: {stock_symbol}', xaxis_title='Time', yaxis_title='Price', template='plotly_dark')
-    st.plotly_chart(fig)
+    for stock in stock_list:
+        data = fetch_stock_data(stock, period='5d', interval='1d')
+        if not data.empty:
+            data = calculate_indicators(data)
+            latest_rsi = data['RSI'].iloc[-1]
+            
+            if latest_rsi < 30:
+                oversold_stocks.append((stock, latest_rsi))
+            elif latest_rsi > 70:
+                overbought_stocks.append((stock, latest_rsi))
+    
+    return oversold_stocks, overbought_stocks
+
+def send_email_alert(oversold, overbought):
+    """Send email alerts for oversold and overbought stocks"""
+    sender_email = "your_email@gmail.com"  # Replace with your email
+    receiver_email = "receiver_email@gmail.com"  # Replace with recipient's email
+    password = "your_email_password"  # Replace with your email password
+    
+    subject = "Daily Stock Alert: Oversold & Overbought Stocks"
+    body = """<h3>📢 Daily Stock Alerts</h3>
+    <b>Oversold Stocks (RSI < 30):</b><br>"""
+    
+    if oversold:
+        body += "<ul>" + "".join([f"<li>{stock} - RSI: {rsi:.2f}</li>" for stock, rsi in oversold]) + "</ul>"
+    else:
+        body += "No oversold stocks today.<br>"
+    
+    body += "<b>Overbought Stocks (RSI > 70):</b><br>"
+    if overbought:
+        body += "<ul>" + "".join([f"<li>{stock} - RSI: {rsi:.2f}</li>" for stock, rsi in overbought]) + "</ul>"
+    else:
+        body += "No overbought stocks today.<br>"
+    
+    message = MIMEMultipart()
+    message['From'] = sender_email
+    message['To'] = receiver_email
+    message['Subject'] = subject
+    message.attach(MIMEText(body, 'html'))
+    
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, password)
+        server.sendmail(sender_email, receiver_email, message.as_string())
+        server.quit()
+        print("📩 Email alert sent successfully!")
+    except Exception as e:
+        print(f"⚠️ Email alert failed: {e}")
 
 def main():
     st.set_page_config(page_title="Intraday Stock Analysis", layout="wide")
@@ -67,9 +115,22 @@ def main():
         st.subheader("Buy/Sell Signals")
         buy_signals = data[['Close', 'Buy_Signal', 'Sell_Signal']].dropna()
         st.dataframe(buy_signals.tail())
-        
-        st.subheader("Stock Price Chart with Signals")
-        plot_stock_chart(data, stock_symbol)
+    
+    st.subheader("📌 Daily Oversold & Overbought Stocks")
+    stock_list = ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'SBIN.NS']
+    oversold, overbought = get_oversold_overbought_stocks(stock_list)
+    
+    if oversold:
+        st.write("### 🟢 Oversold Stocks (RSI < 30)")
+        st.write(pd.DataFrame(oversold, columns=['Stock', 'RSI']))
+    
+    if overbought:
+        st.write("### 🔴 Overbought Stocks (RSI > 70)")
+        st.write(pd.DataFrame(overbought, columns=['Stock', 'RSI']))
+    
+    if st.button("📩 Send Email Alert"):
+        send_email_alert(oversold, overbought)
+        st.success("Email alert sent successfully!")
 
 if __name__ == "__main__":
     main()
